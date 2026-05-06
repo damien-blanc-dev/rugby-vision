@@ -1,0 +1,67 @@
+# RugbyVision Configuration
+
+model:
+  weights: yolov8n.pt          # path to YOLOv8 weights (local or HuggingFace/Roboflow model)
+  confidence: 0.35             # detection confidence threshold
+  iou: 0.45                    # NMS IoU threshold
+  device: ""                   # "" = auto (cuda if available, else cpu)
+  classes: [0]                 # COCO class indices to keep (0 = person); ignored for custom models
+
+tracking:
+  track_thresh: 0.45           # ByteTrack confidence threshold for track activation
+  track_buffer: 30             # frames to keep a lost track alive
+  match_thresh: 0.8            # IoU matching threshold
+
+team_classifier:
+  n_clusters: 2                # number of teams (K-means clusters)
+  color_space: hsv             # hsv | rgb | lab
+  crop_top_ratio: 0.15         # fraction of bbox height to crop from top (ignore head)
+  crop_bottom_ratio: 0.15      # fraction of bbox height to crop from bottom (ignore legs)
+  stable_after_frames: 100     # freeze cluster centres after N predict() calls to prevent drift
+  centers_save_path: ""        # optional path to save/load frozen cluster centres (.json)
+  team_colors:                 # display colors for each team [B, G, R]
+    team_a: [0, 100, 255]      # orange
+    team_b: [255, 50, 50]      # blue
+  referee_color: [200, 200, 200] # grey
+
+homography:
+  field_length_m: 100          # real field length in meters
+  field_width_m: 68            # real field width in meters
+  field_image_path: ""         # path to a field SVG/PNG (blank = generated)
+  calibration_save_path: calibration.npz  # where to save/load the homography matrix
+
+visualization:
+  show_ids: true
+  show_team_color: true
+  show_speed: false
+  annotation_thickness: 2
+  label_text_scale: 0.5
+  minimap:
+    width: 400                 # minimap panel width in pixels
+    height: 260                # minimap panel height in pixels
+    player_dot_radius: 6
+    opacity: 0.85
+  trails:
+    enabled: true              # draw fading positional tail behind each player
+    length: 20                 # number of past frames retained
+    min_alpha: 0.05            # opacity of oldest trail point (0–1)
+
+metrics:
+  heatmap_bins: 50             # grid resolution for heatmap
+  speed_smoothing_frames: 5    # rolling window for speed estimation (frames)
+  output_dir: outputs/
+
+analytics:
+  ruck_proximity_m: 5.0        # field-space radius (m) to declare a player "in a ruck zone"
+
+reidentification:
+  ruck_radius_px: 120.0        # max centroid distance (px) to consider two players in the same ruck
+  min_players_in_group: 4      # minimum cluster size to declare a ruck
+  memory_ttl_frames: 60        # frames before a player memory expires
+  reid_confidence_threshold: 0.6  # minimum confidence to commit a re-ID match
+  hysteresis_frames: 5         # consecutive frames below threshold to end a ruck
+  color_weight: 0.50           # jersey-colour weight in matching cost
+  position_weight: 0.35        # spatial distance weight
+  size_weight: 0.15            # bbox aspect-ratio weight
+  ocr_bonus: 0.40              # cost reduction when jersey numbers match via OCR
+  use_ocr: false               # enable EasyOCR jersey number reading (slower)
