@@ -83,55 +83,71 @@ class FieldHomography:
         RuntimeError
             If the user closes the window before selecting 4 points.
         """
-        src_pts: list[list[float]] = []
-        clone = frame.copy()
+        # Resize frame to fit screen if too large
+        max_w, max_h = 1280, 720
+        h0, w0 = frame.shape[:2]
+        scale = min(max_w / w0, max_h / h0, 1.0)
+        display = cv2.resize(frame, (int(w0 * scale), int(h0 * scale))) if scale < 1.0 else frame.copy()
+        clone = display.copy()
+
+        # Clicked points in display space (scaled back to original at the end)
+        src_pts_display: list[list[float]] = []
 
         def _on_click(event, x, y, flags, param):
-            if event == cv2.EVENT_LBUTTONDOWN and len(src_pts) < 4:
-                src_pts.append([x, y])
-                idx = len(src_pts) - 1
-                cv2.circle(clone, (x, y), 6, (0, 255, 0), -1)
+            if event == cv2.EVENT_LBUTTONDOWN and len(src_pts_display) < 4:
+                src_pts_display.append([x, y])
+                idx = len(src_pts_display) - 1
+                cv2.circle(clone, (x, y), 8, (0, 255, 0), -1)
+                cv2.circle(clone, (x, y), 8, (0, 0, 0), 2)
                 cv2.putText(
                     clone,
-                    self._CORNER_NAMES[idx],
-                    (x + 8, y - 8),
+                    f"{idx+1}. {self._CORNER_NAMES[idx]}",
+                    (x + 10, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
+                    0.65,
                     (0, 255, 0),
                     2,
+                    cv2.LINE_AA,
                 )
-                cv2.imshow("Calibration — click 4 corners", clone)
+                remaining = 4 - len(src_pts_display)
+                status = f"{remaining} point(s) remaining — press Enter when done" if remaining else "All 4 points set — press Enter to confirm"
+                cv2.rectangle(clone, (0, 0), (clone.shape[1], 45), (0, 0, 0), -1)
+                cv2.putText(clone, instructions, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(clone, status, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 100), 1, cv2.LINE_AA)
+                cv2.imshow(win, clone)
 
-        win = "Calibration — click 4 corners"
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        win = "Calibration"
+        # WINDOW_AUTOSIZE avoids mouse-event issues on Windows with WINDOW_NORMAL
+        cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(win, _on_click)
 
-        instructions = (
-            "Click: TL → TR → BR → BL  |  r = reset  |  Enter = confirm  |  q = quit"
-        )
-        cv2.putText(
-            clone, instructions, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2
-        )
+        instructions = "Click: 1-TL  2-TR  3-BR  4-BL  |  r=reset  Enter=confirm  q=quit"
+        cv2.rectangle(clone, (0, 0), (clone.shape[1], 45), (0, 0, 0), -1)
+        cv2.putText(clone, instructions, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(clone, "Click the 4 corners of the pitch", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
         cv2.imshow(win, clone)
 
         while True:
-            key = cv2.waitKey(20) & 0xFF
+            key = cv2.waitKey(1) & 0xFF  # 1ms — keeps event loop responsive
             if key == ord("r"):
-                src_pts.clear()
-                clone = frame.copy()
-                cv2.putText(
-                    clone, instructions, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2
-                )
+                src_pts_display.clear()
+                clone = display.copy()
+                cv2.rectangle(clone, (0, 0), (clone.shape[1], 45), (0, 0, 0), -1)
+                cv2.putText(clone, instructions, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(clone, "Reset — click the 4 corners again", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 180, 255), 1, cv2.LINE_AA)
                 cv2.imshow(win, clone)
-            elif key in (13, ord("\r")) and len(src_pts) == 4:  # Enter
+            elif key in (13, 10) and len(src_pts_display) == 4:  # Enter
                 break
             elif key == ord("q"):
-                cv2.destroyWindow(win)
+                cv2.destroyAllWindows()
                 raise RuntimeError("Calibration aborted by user.")
             elif cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
                 raise RuntimeError("Calibration window closed before 4 points were selected.")
 
-        cv2.destroyWindow(win)
+        cv2.destroyAllWindows()
+
+        # Scale points back to original image coordinates
+        src_pts = [[x / scale, y / scale] for x, y in src_pts_display]
         self._compute_homography(np.array(src_pts, dtype=np.float32))
 
     def calibrate_from_points(self, src_pts: np.ndarray) -> None:
