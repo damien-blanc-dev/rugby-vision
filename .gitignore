@@ -221,3 +221,18 @@ __marimo__/
 
 
 *data
+
+# ---- RugbyVision-specific ----
+# Generated outputs (videos, heatmaps, reports) — often large
+outputs/
+
+# YOLOv8 model weights — download separately (ultralytics auto-downloads)
+*.pt
+*.pth
+
+# Runtime calibration files — machine-specific, re-created by --calibrate
+calibration.npz
+
+# GitNexus index and Claude Code settings
+.gitnexus
+.claude
