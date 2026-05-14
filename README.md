@@ -1,26 +1,54 @@
 # RugbyVision
 
-> Computer vision pipeline for rugby player tracking and tactical analysis from match video.
+> Research-oriented computer vision pipeline for robust rugby player tracking under dense occlusion, with field-aware analytics from monocular broadcast video.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_USERNAME/rugby-vision/blob/main/notebooks/demo.ipynb)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)P
 
-<!-- Replace with an actual GIF once you have a sample output -->
+<!-- Replace with an actual GIF or short MP4 preview once a sample sequence is available -->
 <!-- ![Demo GIF](assets/demo.gif) -->
 
-## What it does
+## Overview
 
-| Output | Description |
-|--------|-------------|
-| **Annotated video** | Bounding boxes + persistent tracker IDs, coloured by team |
-| **2-D tactical minimap** | Real-time top-down field view with player positions |
-| **Heatmaps** | Per-team or per-player cumulative position density |
-| **Distance & speed** | Total metres covered and average speed per player |
+**RugbyVision** is a monocular computer vision system for tracking rugby players in broadcast match footage, recovering identities after dense occlusions such as rucks and scrums, projecting player positions onto field coordinates, and producing match-level tactical analytics.
 
-## Architecture
+The project is designed not only as an engineering pipeline, but also as an exploration of a harder research question:
 
-```
+> **How can identity persistence be maintained in sports video when multiple visually similar players disappear inside short-lived, structured occlusions?**
+
+That question matters because standard multi-object trackers perform well when players remain visible, but frequently break identity consistency when several athletes merge into a compact cluster and reappear a few frames later.
+
+## Why this problem is hard
+
+Tracking rugby players from a single broadcast camera is challenging for several reasons:
+
+- **Dense multi-player occlusions** are common during rucks and scrums.
+- **Appearance cues are weak** because players on the same team wear similar jerseys.
+- **Broadcast footage is not metric by default**, so tactical analysis requires geometric calibration.
+- **Team-color clustering can drift** when one team temporarily leaves the frame.
+- **Identity recovery must be measurable**, not just visually plausible.
+
+RugbyVision focuses on these failure modes rather than treating player tracking as a generic bounding-box problem.
+
+## Current capabilities
+
+The current implementation already supports the following outputs:
+
+| Output | Status | Description |
+|--------|--------|-------------|
+| Annotated video | Implemented | Bounding boxes, persistent IDs, team-colored overlays, and side-by-side visualization |
+| Top-down minimap | Implemented | Real-time 2D field projection of player positions |
+| Heatmaps | Implemented | Per-player or per-team spatial occupancy summaries |
+| Distance and speed estimates | Implemented | Metrics derived from projected field coordinates |
+| Match intelligence report | Implemented | JSON export with player summaries, ruck events, re-ID log, and proximity matrix |
+| Baseline vs. re-ID benchmark | Implemented | Comparison between ByteTrack alone and ByteTrack + custom re-identification |
+
+## Method
+
+The pipeline is organized as follows:
+
+```text
 VideoCapture
     │
     ▼
@@ -30,19 +58,169 @@ PlayerDetector (YOLOv8)
 PlayerTracker (ByteTrack via supervision)
     │
     ▼
-OcclusionReidentifier  ←── ruck/scrum detected?
-    │   • freezes PlayerMemory (position, HSV, bbox, OCR jersey#)
-    │   • Hungarian matching on dispersion
-    │   • remaps ByteTrack IDs → original pre-ruck IDs
+FieldHomography
     │
-    ├──► TeamClassifier (K-means on HSV jersey colours)
+    ├──► OcclusionReidentifier
+    │       • detects dense ruck/scrum-like clusters
+    │       • freezes player memory before occlusion
+    │       • matches resurfacing players with Hungarian assignment
+    │       • restores original pre-occlusion identities
     │
-    ├──► FieldHomography (perspective → 2-D field coords)
+    ├──► TeamClassifier
+    │       • clusters jersey colors
+    │       • freezes cluster centers to prevent drift
     │
-    ├──► MetricsCollector (heatmap, distance, speed)
+    ├──► MetricsCollector
+    │       • distance, speed, average position, heatmaps
     │
-    └──► Visualizer (annotated feed + minimap side-by-side)
+    ├──► MatchAnalyzer
+    │       • ruck statistics, proximity matrix, team aggregates
+    │
+    └──► Visualizer
+            • annotated video + tactical minimap
 ```
+
+## Re-identification strategy
+
+The most research-oriented part of the project is the **post-occlusion re-identification module**.
+
+When a dense player cluster is detected:
+
+1. A **ruck event** is opened from connected components of nearby player centroids.
+2. A **memory snapshot** is frozen for each player in the cluster.
+3. When the cluster dissolves, newly surfaced tracker IDs are matched to lost players.
+4. Matching is solved as a **bipartite assignment** using the Hungarian algorithm.
+5. Confirmed matches remap new tracker IDs back to the original pre-ruck identities.
+
+Each frozen memory can contain:
+
+- Last image-space bounding box
+- Last field position, when homography is available
+- Mean jersey color in HSV
+- Bounding-box aspect ratio
+- Optional OCR jersey number
+
+The current cost function combines appearance and geometry:
+
+```text
+cost(old_i, new_j)
+  = color_weight    × normalized HSV distance
+  + position_weight × normalized spatial distance
+  + size_weight     × normalized bbox-shape difference
+  - ocr_bonus       × jersey-number agreement
+```
+
+Only assignments above a configurable confidence threshold are committed.
+
+## Team classification stability
+
+A common failure mode in sports footage is **cluster drift**: if one team temporarily dominates the visible set of players, online K-means can shift its centers and silently swap team labels.
+
+To reduce this effect, RugbyVision:
+
+- fits team-color clusters during a short warm-up phase,
+- optionally reloads previously saved centers,
+- freezes the cluster centers after a configurable number of prediction calls,
+- switches to nearest-centroid assignment once stable.
+
+This makes team labels more consistent across long clips and unbalanced camera views.
+
+## Geometric reasoning
+
+Broadcast video is not directly expressed in metres, so player analytics depend on a field calibration step.
+
+RugbyVision uses a planar **homography** estimated from four manually clicked field corners. Once calibrated, the bottom-center point of each player bounding box is projected from image coordinates to field coordinates. This enables:
+
+- distance covered in metres,
+- average speed in m/s,
+- tactical occupancy heatmaps,
+- pairwise proximity analysis,
+- team-level spatial summaries.
+
+## Evaluation
+
+The repository already includes a benchmark script for MOT-style evaluation.
+
+It currently supports:
+
+- MOT-format ground truth sequences,
+- Roboflow MOT exports,
+- CEA Rugby Sevens–style data,
+- baseline comparison against ByteTrack without re-identification.
+
+The implemented metrics include:
+
+| Metric | Status | Purpose |
+|--------|--------|---------|
+| MOTA | Implemented | Global tracking quality |
+| HOTA (simplified) | Implemented | Combined detection/association quality |
+| ID Switches | Implemented | Identity consistency |
+| Post-occlusion MOTA | Implemented | Recovery quality immediately after ruck events |
+| Re-ID accuracy | Implemented | Correctness of identity restoration when GT is available |
+
+The benchmark is intentionally focused on the most important claim of the project: **identity recovery after structured occlusion**.
+
+## What is already implemented
+
+### Core pipeline
+
+- YOLO-based player detection
+- ByteTrack-based multi-object tracking
+- Interactive field calibration
+- Homography projection to field coordinates
+- Team classification from jersey colors
+- Video rendering with minimap
+- Distance, speed, and heatmap analytics
+- Match report export to JSON
+- Post-occlusion re-identification with Hungarian matching
+- Benchmarking against a no-reID baseline
+
+### Engineering choices already visible in the codebase
+
+- Modular project structure with separate components for detection, tracking, homography, analytics, visualization, and re-identification
+- Config-driven parameters rather than hardcoded thresholds
+- CLI entry points for calibration, full tracking runs, and benchmark experiments
+- Support for local videos and YouTube inputs
+- Persisted team-cluster centers across runs
+- Logging of re-identification events for offline analysis
+
+## What is partially done
+
+These features are present conceptually or structurally, but still look like good candidates for further strengthening:
+
+- **Fine-tuned rugby detector support**: the README already points to using a fine-tuned YOLO model, but the project would benefit from publishing actual trained weights, training protocol, and quantitative gain over the generic detector.
+- **OCR-based jersey reading**: optional support exists in the re-identification module, but it should be treated as experimental until benchmarked on real rugby footage.
+- **Programmatic API exposure**: basic API usage is possible, but a more polished library-style interface and versioned examples would make reuse easier.
+- **Testing**: tests are mentioned, but the project would benefit from broader unit and regression coverage across tracking, re-ID, and analytics modules.
+
+## What is not done yet
+
+The following directions are not yet fully implemented and represent the most promising next steps:
+
+### Research extensions
+
+- **Ablation study of the re-identification cost terms**  
+  Measure the isolated impact of color, position, box shape, and OCR on post-occlusion recovery.
+
+- **Learned player embeddings for re-identification**  
+  Replace hand-crafted appearance cues with a trainable embedding model and compare against the current HSV-based memory.
+
+- **Uncertainty-aware tracking and analytics**  
+  Attach confidence estimates to identity recovery, field projection, and downstream tactical metrics.
+
+- **Event understanding beyond rucks**  
+  Extend the pipeline toward structured recognition of mauls, kick chases, defensive lines, or transition phases.
+
+- **Homography sensitivity analysis**  
+  Quantify how calibration noise propagates into distance, speed, and heatmap errors.
+
+### Product and reproducibility improvements
+
+- Publish a reproducible benchmark subset with annotations.
+- Add visual failure-case galleries to the README.
+- Include result tables from actual experiments, not only the evaluation script.
+- Add a short technical report or mini-paper describing methodology and limitations.
+- Provide demo assets directly in the repository.
 
 ## Quick start
 
@@ -54,17 +232,19 @@ cd rugby-vision
 pip install -r requirements.txt
 ```
 
-### 2. Calibrate the field (first time only)
+### 2. Calibrate the field
 
 ```bash
 python scripts/calibrate_field.py --source match.mp4
 ```
 
-An OpenCV window opens on the first frame. Click the 4 corners of the pitch in order:
-**Top-Left → Top-Right → Bottom-Right → Bottom-Left**, then press **Enter**.
-The matrix is saved to `calibration.npz`.
+An OpenCV window opens on the first frame. Click the four field corners in order:
 
-### 3. Run tracking
+**Top-left → top-right → bottom-right → bottom-left**
+
+Then press **Enter**. The homography matrix is saved to `calibration.npz`.
+
+### 3. Run the full pipeline
 
 ```bash
 # Local file
@@ -73,280 +253,112 @@ python scripts/run_tracking.py --source match.mp4
 # YouTube URL (requires yt-dlp)
 python scripts/run_tracking.py --source "https://youtu.be/..."
 
-# Force re-calibration + live preview
+# Force interactive re-calibration and enable preview
 python scripts/run_tracking.py --source match.mp4 --calibrate --display
 ```
 
-Outputs go to `outputs/` by default (configurable in `config.yaml`):
-- `*_annotated.mp4` — side-by-side annotated video
-- `*_heatmap.png` — position heatmap
-- `*_distances.png` — distance per player bar chart
+By default, outputs are saved to the configured output directory and include:
 
-## Configuration
-
-All tunable parameters live in [`config.yaml`](config.yaml) — no hardcoded values.
-
-```yaml
-model:
-  weights: yolov8n.pt   # swap for a fine-tuned rugby model
-  confidence: 0.35
-
-team_classifier:
-  n_clusters: 2         # set to 3 to separate referees
-
-homography:
-  field_length_m: 100
-  field_width_m: 68
-```
-
-## Using a fine-tuned rugby model
-
-The [rugby-league-player-tracking](https://universe.roboflow.com/max-hornigold-muhgz/rugby-league-player-tracking)
-dataset on Roboflow Universe provides labelled match footage.
-
-```python
-from ultralytics import YOLO
-model = YOLO("yolov8n.pt")
-model.train(data="path/to/dataset.yaml", epochs=50, imgsz=640)
-```
-
-Then point `config.yaml → model.weights` at your trained `best.pt`.
-
-## Programmatic API
-
-```python
-import yaml, cv2
-from rugby_vision import PlayerDetector, PlayerTracker, TeamClassifier
-from rugby_vision import FieldHomography, Visualizer, MetricsCollector
-
-cfg = yaml.safe_load(open("config.yaml"))
-
-detector = PlayerDetector.from_config(cfg["model"])
-tracker  = PlayerTracker.from_config(cfg["tracking"])
-clf      = TeamClassifier.from_config(cfg["team_classifier"])
-hom      = FieldHomography(calibration_path="calibration.npz")
-vis      = Visualizer.from_config(cfg)
-metrics  = MetricsCollector.from_config(cfg, fps=25.0)
-
-cap = cv2.VideoCapture("match.mp4")
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
-    dets        = detector.detect(frame)
-    dets        = tracker.update(dets, frame)
-    team_labels = clf.predict(frame, dets)
-    field_pts   = hom.project_detections(dets)
-    metrics.update(dets.tracker_id, field_pts, team_labels)
-    out = vis.draw(frame, dets, team_labels, field_pts)
-    cv2.imshow("RugbyVision", out)
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
-
-metrics.plot_heatmap("heatmap.png")
-summary = metrics.summary()
-```
-
-## Running tests
-
-```bash
-pip install pytest
-pytest tests/
-```
-
-## Post-occlusion re-identification
-
-Rucks and scrums cause dense, multi-player occlusions that exceed ByteTrack's
-built-in buffer, leading to ID switches when players resurface.
-`OcclusionReidentifier` addresses this with a three-step approach:
-
-1. **Ruck detection** — connected-component analysis on player centroids; a
-   cluster of ≥ N players within `ruck_radius_px` triggers a ruck event.
-2. **Player memory** — position, mean HSV jersey colour, bbox aspect ratio, and
-   (optionally) jersey number via EasyOCR are frozen for each player in the zone.
-3. **Hungarian matching** — when the cluster disperses, new ByteTrack IDs are
-   matched against the frozen memories via a weighted cost matrix
-   (`color_weight`, `position_weight`, `size_weight`) and
-   `scipy.optimize.linear_sum_assignment`.  Matches above
-   `reid_confidence_threshold` restore the original IDs.
-
-All re-ID events are logged in `OcclusionReidentifier.reid_log` for benchmarking.
-
-Enable OCR jersey-number reading (slower, requires `easyocr`):
-```yaml
-# config.yaml
-reidentification:
-  use_ocr: true
-```
+- `*_annotated.mp4` — annotated match video with minimap
+- `*_heatmap.png` — spatial heatmap
+- `*_distances.png` — per-player distance chart
+- `*_match_report.json` — structured analytics report
 
 ## Benchmarking
 
-`scripts/benchmark.py` evaluates the pipeline on MOT-format sequences and
-produces a comparison between the baseline (ByteTrack only) and RugbyVision
-(ByteTrack + OcclusionReidentifier).
-
-Compatible datasets:
-- [CEA Rugby Sevens](https://kalisteo.cea.fr/wp-content/uploads/2022/04/README_R7.html)
-- [Roboflow MOT export](https://universe.roboflow.com/max-hornigold-muhgz/rugby-league-player-tracking)
-- Any MOT Challenge–format dataset
-
-```
-benchmark/sequences/
-└── seq01/
-    ├── gt/gt.txt        # ground truth (MOT format)
-    ├── img1/*.jpg       # frames  (or video.mp4)
-    └── seqinfo.ini      # optional metadata (fps, resolution)
-```
-
 ```bash
-# Run full benchmark
+# Full benchmark
 python scripts/benchmark.py \
     --sequences benchmark/sequences/ \
     --output benchmark/results.md
 
-# Baseline only (skip Re-ID)
-python scripts/benchmark.py --sequences benchmark/sequences/ --baseline-only
+# Baseline only
+python scripts/benchmark.py \
+    --sequences benchmark/sequences/ \
+    --baseline-only
 ```
 
-Metrics computed:
-| Metric | Description |
-|--------|-------------|
-| **MOTA** | 1 − (FP + FN + IDSW) / GT |
-| **HOTA** | √(DetA × AssA) — simplified |
-| **ID Switches** | Total identity swaps |
-| **Post-occlusion MOTA** | MOTA on frames t+1…t+30 after each ruck (key metric) |
-| **Re-ID Accuracy** | % of re-assignments matching GT track ID |
+Expected benchmark directory layout:
 
-## Match intelligence report
-
-After each run, `outputs/<stem>_match_report.json` is produced:
-
-```jsonc
-{
-  "meta": { "total_frames": 3750, "duration_s": 150.0, "total_rucks": 8 },
-  "players": {
-    "3": {
-      "team": 0, "distance_m": 412.7, "avg_speed_ms": 4.1,
-      "ruck_time_s": 18.4, "ruck_density": 0.123,
-      "avg_position": { "x_m": 34.2, "y_m": 61.8 }
-    }
-  },
-  "team_aggregates": {
-    "0": { "total_distance_m": 3840.2, "total_ruck_time_s": 96.0 }
-  },
-  "proximity_matrix": {
-    "players": [1, 3, 5, 7, ...],
-    "matrix": [[0, 8.4, 14.1, ...], ...]   // avg metres between each pair
-  },
-  "ruck_events": [...],
-  "reid_log": [...]
-}
+```text
+benchmark/sequences/
+└── seq01/
+    ├── gt/gt.txt
+    ├── img1/*.jpg
+    ├── video.mp4
+    └── seqinfo.ini
 ```
 
-## Team colour stability
+## Example outputs
 
-A common failure mode is **cluster drift**: if one team leaves frame during a
-kick-chase, K-means re-assigns on the unbalanced sample and swaps team colours
-for the rest of the clip.
+After a run, RugbyVision can produce a match report with:
 
-RugbyVision solves this by **freezing cluster centres** after
-`stable_after_frames` (default: 100) prediction calls.  After that, assignment
-is done by simple nearest-centroid (O(1) per player) with fixed anchors.
+- per-player distance and average speed,
+- average field position,
+- time spent near active ruck zones,
+- team-level aggregates,
+- pairwise player proximity matrix,
+- list of detected ruck events,
+- list of re-identification events.
 
-Centres can be persisted across sessions:
-```yaml
-# config.yaml
-team_classifier:
-  stable_after_frames: 100
-  centers_save_path: centers.json  # saved at end of run, loaded on next run
-```
+## Limitations
 
-```bash
-# Second run loads saved centres — no warm-up needed
-python scripts/run_tracking.py --source game2.mp4
+This project is intentionally ambitious, and several limitations remain:
 
-# Force re-calibration even if centers.json exists
-python scripts/run_tracking.py --source game2.mp4 --recalibrate-teams
-```
+- The current re-identification approach is still largely **heuristic**, not learned.
+- Homography assumes a roughly planar field and a usable manual calibration.
+- Broadcast camera cuts, zoom changes, and strong motion can still degrade tracking.
+- Team-color clustering remains sensitive when jersey colors are visually close.
+- The HOTA computation is currently a simplified implementation.
+- Benchmark claims depend on the quality and representativeness of available MOT annotations.
 
-## Architecture décisionnelle
+These limitations are not hidden because they define the next research and engineering steps.
 
-### Pourquoi le Matching Hongrois pour la ré-identification ?
+## Research roadmap
 
-Après un ruck, $N$ joueurs ont perdu leur ID ByteTrack et $M$ nouveaux IDs
-sont apparus.  Le problème est une **affectation bipartite** : chaque joueur
-perdu doit être associé au plus à un nouveau détection, et vice-versa.
+The most valuable next experiments would be:
 
-| Approche | Complexité | Optimalité |
-|----------|-----------|------------|
-| Greedy (plus proche voisin) | O(N²) | Non — l'ordre d'affectation biaised |
-| Recherche exhaustive | O(N!) | Optimale — impraticable au-delà de N=8 |
-| **Algorithme Hongrois** (Kuhn-Munkres) | **O(N³)** | **Optimale garantie** |
-
-Pour un ruck de 8 joueurs perdus × 8 candidats, l'algo hongrois s'exécute en
-< 1 ms sur CPU.  La **matrice de coût** combine trois signaux normalisés :
-
-```
-cost[i,j] = 0.50 × ΔcouleurHSV / 441.7
-           + 0.35 × distance_px / diagonale_image
-           + 0.15 × |ratio_bbox_i − ratio_bbox_j| / max_ratio
-           − 0.40 × [1 si numéros_OCR_concordent]
-```
-
-Seules les paires avec `confidence = 1 − cost/cost_max ≥ 0.6` sont validées.
-
-### Comment l'homographie transforme les pixels en mètres réels ?
-
-Une caméra fixe projette le plan du terrain sur le plan image selon une
-**transformation homographique** — une bijection projective 2D→2D représentée
-par une matrice 3×3 **H**.
-
-**Calibration** : l'utilisateur clique 4 points du terrain dont les
-coordonnées réelles sont connues (coins de la pelouse en mètres).
-OpenCV résout le système linéaire 4×4 (8 équations, 8 inconnues) par
-décomposition SVD pour trouver **H**.
-
-**Projection** d'un pixel (u, v) vers un point terrain (x_m, y_m) :
-
-```
-[x']   [H₀₀  H₀₁  H₀₂] [u]
-[y'] = [H₁₀  H₁₁  H₁₂] [v]
-[w']   [H₂₀  H₂₁  H₂₂] [1]
-
-x_m = x'/w',  y_m = y'/w'
-```
-
-Le pied du joueur (centre bas de sa bbox) est utilisé comme point de contact
-au sol — c'est la projection la plus précise pour un être debout.
-
-**Précision typique** : avec 4 points bien choisis sur un terrain de 100×68 m,
-l'erreur de projection est < 0.5 m pour les zones centrales et < 1.5 m en
-bord de cadre (distorsion de parallaxe).
+1. **Ablation benchmarking** of the re-ID module.
+2. **Comparison against learned ReID embeddings**.
+3. **Quantitative calibration-error study** for field analytics.
+4. **Event recognition from trajectories** rather than only player tracking.
+5. **Public benchmark report** with actual tables, plots, and failure cases.
 
 ## Project structure
 
-```
+```text
 rugby-vision/
-├── config.yaml                  # all tunable parameters
+├── config.yaml
 ├── requirements.txt
 ├── rugby_vision/
-│   ├── detector.py              # YOLOv8 wrapper
-│   ├── tracker.py               # ByteTrack via supervision
-│   ├── team_classifier.py       # K-means HSV + frozen centres (anti-drift)
-│   ├── homography.py            # field calibration + 2-D projection
-│   ├── visualizer.py            # annotated video + minimap + trails + ruck halos
-│   ├── metrics.py               # heatmap, distances, statistics
-│   ├── reidentifier.py          # post-occlusion re-ID (ruck/scrum)
-│   └── analytics.py             # match intelligence → match_report.json
+│   ├── detector.py
+│   ├── tracker.py
+│   ├── team_classifier.py
+│   ├── homography.py
+│   ├── visualizer.py
+│   ├── metrics.py
+│   ├── reidentifier.py
+│   └── analytics.py
 ├── scripts/
-│   ├── run_tracking.py          # CLI entry point
-│   ├── calibrate_field.py       # interactive calibration tool
-│   └── benchmark.py             # MOTA/HOTA evaluation on MOT datasets
+│   ├── calibrate_field.py
+│   ├── run_tracking.py
+│   ├── benchmark.py
+│   └── frames_to_video.py
 ├── notebooks/
-│   └── demo.ipynb               # Colab-friendly walkthrough
+│   └── demo.ipynb
 └── tests/
     └── test_homography.py
 ```
+
+## Positioning
+
+RugbyVision can be read at three levels:
+
+- as an **engineering project** for end-to-end sports video analytics,
+- as a **computer vision project** about tracking under structured occlusion,
+- as a **research prototype** for studying identity persistence in monocular multi-player scenes.
+
+That combination is the main point of the repository.
 
 ## License
 
